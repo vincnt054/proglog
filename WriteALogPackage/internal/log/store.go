@@ -8,84 +8,97 @@ import (
 )
 
 var (
-	enc = binary.BigEndian // encoding that persist within record size and index entries in
+	enc = binary.BigEndian
 )
 
 const (
-	lenWidth = 8 // number of bytes to store record's length
+	lenWidth = 8
 )
 
 type store struct {
 	*os.File
-	mu   sync.Mutex
-	buf  *bufio.Writer
-	size uint64
+	mut    sync.Mutex
+	buffer *bufio.Writer
+	size   uint64
 }
 
-// creates a store for the given file
-func newStore(f *os.File) (*store, error) {
-	fi, err := os.Stat(f.Name()) // get current size
+func storeCtor(f *os.File) (*store, error) {
+	fd, err := os.Stat(f.Name()) // file descriptor for a file
 	if err != nil {
 		return nil, err
 	}
 
-	size := uint64(fi.Size())
+	size := uint64(fd.Size())
+
 	return &store{
-		File: f,
-		size: size,
-		buf:  bufio.NewWriter(f),
+		File:   f,
+		size:   size,
+		buffer: bufio.NewWriter(f),
 	}, nil
 }
 
-func (s *store) Append(p []byte) (n uint64, pos uint64, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pos = s.size
-	if err := binary.Write(s.buf, enc, uint64(len(p))); err != nil {
+func (st *store) Append(p []byte) (uint64, uint64, error) {
+	st.mut.Lock()
+	defer st.mut.Unlock()
+
+	pos := st.size // current position in store file
+
+	if err := binary.Write(st.buffer, enc, uint64(len(p))); err != nil { // store the size of record
 		return 0, 0, err
 	}
-	w, err := s.buf.Write(p)
+	w, err := st.buffer.Write(p) // store the content of the record
 	if err != nil {
 		return 0, 0, err
 	}
+
 	w += lenWidth
-	s.size += uint64(w)
+	st.size += uint64(w)
+
 	return uint64(w), pos, nil
 }
 
-func (s *store) Read(pos uint64) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.buf.Flush(); err != nil {
+func (st *store) Read(position uint64) ([]byte, error) {
+	st.mut.Lock()
+	defer st.mut.Unlock()
+
+	if err := st.buffer.Flush(); err != nil {
 		return nil, err
 	}
-	size := make([]byte, lenWidth)
-	if _, err := s.File.ReadAt(size, int64(pos)); err != nil {
+
+	size := make([]byte, lenWidth) // read in the size of record
+	if _, err := st.File.ReadAt(size, int64(position)); err != nil {
 		return nil, err
 	}
-	b := make([]byte, enc.Uint64(size))
-	if _, err := s.File.ReadAt(b, int64(pos+lenWidth)); err != nil {
+
+	buffer := make([]byte, enc.Uint64(size))                                    // create a buffer of size SIZE
+	if _, err := st.File.ReadAt(buffer, int64(position+lenWidth)); err != nil { // read in the content at position+lenWidth into buffer, size(buffer)
 		return nil, err
 	}
-	return b, nil
+	return buffer, nil
 }
 
-func (s *store) ReadAt(p []byte, off int64) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.buf.Flush(); err != nil {
+func (st *store) ReadAt(p []byte, off int64) (int, error) {
+	st.mut.Lock()
+	defer st.mut.Unlock()
+	if err := st.buffer.Flush(); err != nil {
 		return 0, err
 	}
-
-	return s.File.ReadAt(p, off)
+	return st.File.ReadAt(p, off)
 }
 
-func (s *store) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	err := s.buf.Flush()
+func (st *store) Close() error {
+	st.mut.Lock()
+	defer st.mut.Unlock()
+	err := st.buffer.Flush()
 	if err != nil {
 		return err
 	}
-	return s.File.Close()
+	return st.File.Close()
+}
+
+func nearestMultiple(j, k uint64) uint64 {
+	if j >= 0 {
+		return (j / k) * k
+	}
+	return ((j - k + 1) / k) * k
 }

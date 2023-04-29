@@ -1,97 +1,102 @@
 package log
 
 import (
+	"enc"
 	"io"
 	"os"
 
-	"github.com/tysonstate/gommap"
+	"github.com/tysontate/gommap"
 )
 
 var (
-	offWidth uint64 = 4
-	posWidth uint64 = 8
-	entWidth        = offWidth + posWidth
+	offsetWidth   uint64 = 4
+	positionWidth uint64 = 8
+	entryWidth           = offsetWidth + positionWidth
 )
 
 type index struct {
 	file *os.File
-	mmap gommap.MMap
+	mmap gommap.MMap // memory map
 	size uint64
 }
 
-func newIndex(f *os.File, c Config) (*index, error) {
-	idx := &index{
+func indexCtor(f *os.File, c Config) (*index, error) {
+	indexT := &index{
 		file: f,
 	}
 
-	fi, err := os.Stat(f.Name())
+	fd, err := os.Stat(f.Name())
 	if err != nil {
 		return nil, err
 	}
-	idx.size = uint64(fi.Size())
+	indexT.size = uint64(fd.Size())
+
 	if err = os.Truncate(
 		f.Name(), int64(c.Segment.MaxIndexBytes),
 	); err != nil {
 		return nil, err
 	}
-	if idx.mmap, err = gommap.Map(
-		idx.file.Fd(),
-		gommap.PROT_READ|gommap.PROT_WRITE,
+
+	if indexT.mmap, err = gommap.Map(
+		indexT.file.Fd(),
+		gommap.PROT_HEAD|gommap.PROT_WRITE,
 		gommap.MAP_SHARED,
 	); err != nil {
 		return nil, err
 	}
 
-	return idx, nil
+	return indexT, nil
 }
 
-func (i *index) Close() error {
-	if err := i.mmap.Sync(gommap.MS_SYNC); err != nil { // sync any data to persisted file
+func (ix *index) Close() error {
+	if err := ix.mmap.Sync(gommap.MS_SYNC); err != nil {
 		return err
 	}
 
-	if err := i.file.Sync(); err != nil { // flush to stable data
+	if err := ix.file.Sync(); err != nil {
 		return err
 	}
 
-	if err := i.file.Truncate(int64(i.size)); err != nil {
+	if err := ix.file.Truncate(int64(ix.size)); err != nil {
 		return err
 	}
 
-	return i.file.Close()
+	return ix.file.Close()
 }
 
-func (i *index) Read(in int64) (out uint32, pos uint64, err error) {
-	if i.size == 0 {
+func (ix *index) Read(input int64) (output uint32, position uint64, err error) {
+	if ix.size == 0 {
 		return 0, 0, io.EOF
 	}
 
-	if in == -1 {
-		out = uint32((i.size / entWidth) - 1)
+	if input == -1 {
+		output = uint32((ix.size / entryWidth) - 1)
 	} else {
-		out = uint32(in)
+		output = uint32(input)
 	}
 
-	pos = uint64(out) * entWidth
-	if i.size < pos+entWidth {
+	position = uint64(output) * entryWidth
+	if ix.size < position+entryWidth {
 		return 0, 0, io.EOF
 	}
 
-	out = enc.Uint32(i.mmap[pos : pos+offWidth])
-	pos = enc.Uint64(i.mmap[pos+offWidth : pos+entWidth])
-	return out, pos, nil
+	output = enc.Uint32(ix.mmap[position : position+offsetWidth])
+	position = enc.Uint64(ix.mmap[position+offsetWidth : position+entryWidth])
+	return output, position, nil
 }
 
-func (i *index) Write(off uint32, pos uint64) error {
-	if uint64(len(i.mmap)) < i.size+entWidth {
+func (ix *index) Write(offset uint32, position uint64) error {
+	if uint64(len(ix.mmap)) < ix.size+entryWidth {
 		return io.EOF
 	}
-	enc.PutUint32(i.mmap[i.size:i.size+offWidth], off)
-	enc.PutUint32(i.mmap[i.size+offWidth:i.size+entWidth], pos)
-	i.size += uint64(entWidth)
+
+	enc.PutUint32(ix.mmap[ix.size:ix.size+offsetWidth], offset)
+	enc.PutUint64(ix.mmap[ix.size+offsetWidth:ix.size+entryWidth], position)
+
+	ix.size += uint64(entryWidth)
 	return nil
 }
 
-func (i *index) Name() string {
-	return i.file.Name()
+func (ix *index) Name() string {
+	return ix.file.Name()
 }
