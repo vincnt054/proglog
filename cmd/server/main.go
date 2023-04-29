@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/vincnt054/prolog/internal/server"
+	"github.com/vincnt054/proglog/internal/server"
 )
 
 func main() {
